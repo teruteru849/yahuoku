@@ -1,0 +1,157 @@
+### COOLPIX A100　仕入単価追加VER ###
+from datetime import datetime
+from datetime import datetime, timedelta
+import openpyxl
+import openpyxl as px
+from openpyxl.styles import PatternFill
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+     
+now = datetime.now()
+today = now.strftime('%Y-%m-%d')
+yesterday = now - timedelta(1)
+yes = yesterday.strftime('%Y-%m-%d')
+
+###  エクセルからカメラ名称・仕入れ単価を出力【困りごと①】
+wb_get = openpyxl.load_workbook('【カメラまとめ】.xlsx',data_only=True)
+ws_get = wb_get.worksheets[3]
+#　カメラ名称取得
+keyword = ws_get["B" + str(7)].value
+#　仕入単価取得
+c_value_good = round(ws_get["E"+ str(7)].value)
+c_value_vgood = round(ws_get["F"+ str(7)].value)
+c_value_new = round(ws_get["G"+ str(7)].value)
+
+#　エクセルの保存名
+filename_today = today + '_' + keyword  + '_' +'YahooAuction.xlsx'
+filename_yes = yes + '_' + keyword  + '_' +'YahooAuction.xlsx'
+filename_look = '【☆】' + keyword  + '_' +'YahooAuction.xlsx'
+
+"""
+#昨日のURLリスト化
+wb_yes = openpyxl.load_workbook(filename_yes)
+ws_yes = wb_yes.worksheets[0]
+
+url_list = []
+for urls in list(ws_yes.columns)[2]:
+    url_list.append(urls.value)
+"""
+###　mainプログラム
+def main(): 
+    url = 'https://auctions.yahoo.co.jp/search/search?p=' + keyword + '&n=100';
+    r = requests.get(url)
+    soup = BeautifulSoup(r.text, 'html.parser')
+
+    item_list1 = []
+    item_list2 = []
+    #　プログラム２参照
+    item_list = Pagecrawling(soup, item_list1, item_list2)
+    #　プログラム３参照
+    pageurl = Checkpage(soup.find_all('a', class_='Pager__link'))
+    #　プログラム３がTrue（次へのページが有る）の時、mainとプログラム２を繰り返し実行。
+    while True:
+        if pageurl is None:
+            break
+        else:
+            nextpage = requests.get(pageurl)
+            soup = BeautifulSoup(nextpage.text, 'html.parser')
+            item_list = Pagecrawling(soup, item_list1, item_list2)
+            pageurl = Checkpage(soup.find_all('a', class_='Pager__link'))
+    #　プログラム４参照
+    Write_excel1(item_list1,  keyword)
+    Write_excel2(item_list2,  keyword)
+     
+#プログラム2｜ヤフオクページから情報をスクレイピング
+def Pagecrawling(soup, item_list1, item_list2):
+    products = soup.find_all('li', class_='Product')
+    for product in products:
+        urls = product.find_all('a', class_='Product__titleLink')
+        prices = product.find_all('div', class_='Product__priceInfo')
+        others = product.find_all('div', class_='Product__otherInfo')
+        for (url, price, other) in zip(urls, prices, others,):
+            #　URL取得
+            link = url.get('href')
+            #　商品タイトル取得
+            name = url.get('title')
+            #　現在価格と即決価格を取得
+            if '現在' in price.get_text():
+                if '即決' in price.get_text():
+                    currentprice = price.select_one("[class='Product__priceValue u-textRed']").text.replace('\n', '').replace('円', '').replace(',', '')
+                    fixedprice = price.select_one("[class='Product__priceValue']").text.replace('\n', '').replace('円', '').replace(',', '')
+                else:
+                    currentprice = price.select_one("[class='Product__priceValue u-textRed']").text.replace('\n', '').replace('円', '').replace(',', '')
+                    fixedprice = 0
+            else :
+                fixedprice = price.get_text().replace('\n', '').replace('円', '').replace(',', '').replace('即決', '')
+                currentprice = price.get_text().replace('\n', '').replace('円', '').replace(',', '').replace('即決', '')
+            lefttime = other.find_all('div')[1].get_text().replace('\n','')
+            #　仕入対象外を除外。カメラによって違う。【困りごと②】
+            if 'ジャンク' in name or '難あり' in name or 'ライトガイド' in name or '訳あり' in name :
+                break
+            elif int(currentprice) >= c_value_vgood :
+                break
+            elif 1 <= int(fixedprice) <= 3000 :
+                break
+            else :
+                item_list1.append([name, link, currentprice, fixedprice, lefttime, keyword ,c_value_good,c_value_vgood,c_value_new])
+                item_list2.append([name, link, currentprice, fixedprice, lefttime, keyword ,c_value_good,c_value_vgood,c_value_new])
+    return item_list1,item_list2
+
+# プログラム3｜次へリンクを探す
+def Checkpage(pagerlinks):
+    # プログラム3-1｜変数pageurlをNoneにリセット
+    pageurl = None
+    # プログラム3-2｜引数pagerlinksの中に、「次へ」があれば、そのurlをpageurlに設定（「次へ」がない場合は、Noneのまま）
+    for pagerlink in pagerlinks:
+        if pagerlink.get_text() == '次へ':
+            pageurl = pagerlink.get('href')
+            break
+    # プログラム3-3｜pageurlを返す
+    return  pageurl
+
+# プログラム4｜エクセルに出力
+def Write_excel1(item_list1, keyword):
+    wb = px.Workbook()
+    ws = wb.active
+    fill = PatternFill(patternType='solid', fgColor='e0e0e0', bgColor='e0e0e0')
+    headers = ['No', 'タイトル', 'URL','現在の価格','即決価格','残り時間','名称','良い','非常に良い','ほぼ新品']
+    for i, header in enumerate(headers):
+        ws.cell(row=1, column=1+i, value=headers[i])
+        ws.cell(row=1, column=1+i).fill = fill
+    for y, row in enumerate(item_list1):
+        ws.cell(row= y+2, column= 1, value= y+1)
+        for x, cell in enumerate(row):
+            if x == 0:
+                ws.cell(row= y+2, column= x+2, value=item_list1[y][x])
+            elif x == 1:
+                ws.cell(row= y+2, column= x+2).hyperlink = item_list1[y][x]
+                ws.cell(row= y+2, column= x+2).font = px.styles.fonts.Font(color='0000EE')
+            else:
+                ws.cell(row= y+2, column= x+2, value=item_list1[y][x])
+
+    wb.save(filename_today)
+
+def Write_excel2(item_list2, keyword):
+    wb = px.Workbook()
+    ws = wb.active
+    fill = PatternFill(patternType='solid', fgColor='e0e0e0', bgColor='e0e0e0')
+    headers =  ['No', 'タイトル', 'URL','現在の価格','即決価格','残り時間','名称','良い','非常に良い','ほぼ新品']
+    for i, header in enumerate(headers):
+        ws.cell(row=1, column=1+i, value=headers[i])
+        ws.cell(row=1, column=1+i).fill = fill
+    for y, row in enumerate(item_list2):
+        ws.cell(row= y+2, column= 1, value= y+1)
+        for x, cell in enumerate(row):
+            if x == 0:
+                ws.cell(row= y+2, column= x+2, value=item_list2[y][x])
+            elif x == 1:
+                ws.cell(row= y+2, column= x+2).hyperlink = item_list2[y][x]
+                ws.cell(row= y+2, column= x+2).font = px.styles.fonts.Font(color='0000EE')
+            else:
+                ws.cell(row= y+2, column= x+2, value=item_list2[y][x])
+
+    wb.save(filename_look)
+    
+if __name__ == '__main__':
+    main()
